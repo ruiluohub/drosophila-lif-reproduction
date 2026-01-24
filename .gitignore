@@ -1,31 +1,39 @@
-# Python
+# Data files (large, not for git)
+data_783/
+*.feather
+*.npy
+*.parquet
+
+# Results
+results/
+*.pkl
+*.csv
+
+# Brian2 cache
+brian2_cache/
 __pycache__/
-*.py[cod]
-*.so
-.Python
+*.pyc
 
 # Jupyter
 .ipynb_checkpoints/
-*.ipynb_checkpoints
+*-checkpoint.ipynb
 
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
-
-# Data files
-*.feather
-*.npy
-*.pkl
-*.hdf5
-data/
-results/
-
-# Virtual environments
-venv/
-env/
-ENV/
+# Cache
+cache/
 
 # IDE
 .vscode/
 .idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large test files
+Drosophila_brain_model/
+
+# Temporary
+temp/
+tmp/
+*.log

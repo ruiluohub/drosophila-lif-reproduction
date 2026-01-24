@@ -1,61 +1,218 @@
 # Drosophila Brain LIF Model Reproduction
 
-**Status**: Work in progress (documentation being refined)  
-**Completion Date**: 2026-01-10  
+**Status**: Modularized implementation with performance optimization (v0.1.0-alpha)  
+**Completion Date**: Core validation 2026-01-10 | Modularization 2026-01-25  
 **Based on**: Shiu et al. (2024) "A Drosophila computational brain model reveals sensorimotor processing" *Nature*
+
+---
 
 ## Overview
 
-This repository contains a reproduction of the connectome-constrained Leaky Integrate-and-Fire (LIF) model for the Drosophila brain.
+This repository contains a modularized reproduction of the connectome-constrained Leaky Integrate-and-Fire (LIF) model for the *Drosophila melanogaster* brain.
 
 **Current implementation:**
-- ✅ Network construction from FlyWire v783 connectome (~139K neurons)
-- ✅ Basic activation experiments (Sugar GRN stimulation)
-- ✅ Validation against original paper (firing rate correlation r=0.85)
+- ✅ Modular architecture (4 core modules + utilities)
+- ✅ Network construction from FlyWire v783 connectome (139K neurons, 2.7M synapses)
+- ✅ **Data optimization**: 95% reduction (1.4GB → 68MB) for parallel efficiency
+- ✅ **Parallel execution**: 5.14× speedup validated (6-core)
+- ✅ Validation against original paper (r=0.84 with 3 trials)
 
-**Scope**: This reproduction validates the core methodology (network building, LIF implementation, basic simulations).
+**Scope**: This reproduction validates the core methodology and provides an optimized, parallelizable implementation ready for cloud deployment.
 
-## Quick Start
+---
+
+## ⚡ Key Optimizations
+
+### 1. Data Preprocessing (95% Size Reduction)
+- Precompute neuron signs (excitatory/inhibitory) in main process
+- Filter weak connections (syn_count < 5)
+- Remove redundant neurotransmitter probability columns
+- **Result**: 1.4GB → 68MB, enabling faster parallel worker transmission
+
+### 2. Network Construction Adaptation
+- Skip redundant neuron type calculation when using preprocessed data
+- **Result**: Step 2 time 20.8s → <0.1s per worker
+
+### 3. Parallel Execution Framework
+- Joblib-based parallel simulation
+- Each worker independently builds network and runs trials
+- **Result**: 5.14× speedup on 6-core (1.8 min vs 9.3 min serial)
+
+---
+
+## 🚀 Quick Start
+
+### Installation
 ```bash
-# Install dependencies
-pip install brian2 numpy pandas pyarrow caveclient matplotlib 
+# Clone repository
+git clone https://github.com/ruiluohub/drosophila-lif-reproduction.git
+cd drosophila-lif-reproduction
 
-# View pre-computed results (recommended first)
-jupyter notebook repo_flylif_model.ipynb
+# Create conda environment
+conda env create -f environment.yml
+conda activate flylif
+
+# Download FlyWire data (see Data section below)
 ```
 
-**Note**: The notebook includes all outputs from the validation run completed on 2026-01-10.
+### Basic Usage
+```python
+from flylif.core import load_simulation_data, build_network, run_simulation, DEFAULT_PARAMS
+from pathlib import Path
+from brian2 import Hz
 
-## Key Results
+# Configure paths
+config = {
+    'data_dir': Path('./data_783'),
+    'connections_file': 'proofread_connections_783.feather',
+    'root_ids_file': 'proofread_root_ids_783.npy',
+}
 
-- **Network size**: 139,044 neurons, ~2M synapses (after filtering)
-- **Firing rate correlation with original**: r = 0.85
-- **Validation status**: Core methodology successfully reproduced
+# Load optimized data (68MB)
+DATA = load_simulation_data(config)
 
-## Dependencies
+# Build network (~7 seconds)
+NET = build_network(
+    data=DATA,
+    pre_col=DATA['columns']['pre_col'],
+    post_col=DATA['columns']['post_col'],
+    weight_col=DATA['columns']['weight_col'],
+    nt_prob_cols=DATA['columns'].get('nt_prob_cols', {}),
+    params=DEFAULT_PARAMS
+)
 
-- Brian2 >= 2.7.0
-- Python >= 3.9
-- FlyWire connectome data (v783)
+# Run simulation
+result = run_simulation(
+    net_components=NET,
+    neu_exc=[neuron_ids...],
+    params={'r_poi': 100*Hz},
+    n_trials=10
+)
 
-## Data
+print(f"Active neurons: {result['n_active']}")
+```
 
-FlyWire connectome data required (not included in repo):
-- `proofread_connections_783.feather`
-- `proofread_root_ids_783.npy`
-- `classification.csv`
+---
 
-Place data files in `./data/` directory.
+## 📁 Repository Structure
 
-## Timeline
+```
+drosophila-lif-reproduction/
+├── flylif/                      # Main package
+│   ├── core/                    # Core modules
+│   │   ├── parameters.py        # LIF model parameters
+│   │   ├── data_loader.py       # Optimized data loading
+│   │   ├── network.py           # Brian2 network construction
+│   │   └── simulation.py        # Simulation execution
+│   └── utils/
+│       └── cave_utils.py        # FlyWire ID version conversion
+│
+├── test_exp1_clean.ipynb        # Validation notebook (clean environment)
+├── repo_flylif_model.ipynb      # Original development notebook
+│
+├── README.md                    # This file
+├── PROGRESS.md                  # Development log
+├── TODO.md                      # Planned improvements
+├── environment.yml              # Conda environment
+└── .gitignore
+```
 
-- **2026-01-10**: Core reproduction completed and validated
+---
+
+## 📊 Performance Validation
+
+### Test Configuration
+- Neurons: 21 Sugar GRNs (left hemisphere)
+- Frequencies: 5 points (10, 50, 100, 150, 200 Hz)
+- Trials: 3
+
+### Results
+| Metric | Serial | Parallel (6-core) | Speedup |
+|--------|--------|-------------------|---------|
+| Total time | 9.3 min | 1.8 min | **5.14×** |
+| Data size | 1.4 GB | 68 MB | 20× smaller |
+| Memory/worker | - | ~2 GB | - |
+
+### Scientific Validation
+- **Pearson correlation** (100 Hz vs Shiu et al.): **r = 0.84**
+- **Top 50 neuron overlap**: 84%
+- Expected improvement with 10 trials: r > 0.85
+
+---
+
+## 📈 Cloud Deployment Projection
+
+Based on local 6-core testing (5.14× speedup):
+
+| Hardware | Experiment 1 (19 freqs × 10 trials) | All 5 Experiments |
+|----------|-------------------------------------|-------------------|
+| Local 6-core | ~31 minutes | ~24 hours |
+| AWS 48-core | **~1 minute** | **~1 hour** |
+
+**Estimated AWS cost**: $2 (on-demand) or $0.60 (Spot instance)
+
+---
+
+## 💾 Data
+
+FlyWire connectome data required (v783, not included):
+- `proofread_connections_783.feather` (~3.5GB)
+- `proofread_root_ids_783.npy` (~1MB)
+- `classification.csv` (~20MB)
+
+**Download instructions**: [To be added]
+
+Place data files in `./data_783/` directory.
+
+---
+
+## 🔬 Experiments
+
+### Implemented
+- ✅ Experiment 1: Sugar GRN frequency sweep (validation complete)
+
+### Planned
+- Experiment 2: Sufficiency test (which neurons activate MN9)
+- Experiment 3: Necessity test (silencing experiments)
+- Experiment 4: Sugar + Bitter interaction
+- Experiment 5: Sugar + Ir94e interaction
+
+See `TODO.md` for implementation roadmap.
+
+---
+
+## 🐛 Known Issues
+
+### Memory Limitation (16GB RAM)
+- **Issue**: Parallel runs >12 tasks cause memory exhaustion (swap thrashing)
+- **Impact**: Exponential slowdown after task 12
+- **Workaround**: Use 3-4 workers or batch processing
+- **Permanent fix**: Run on cloud instances with >32GB RAM
+
+See `TODO.md` for detailed improvement plan.
+
+---
+
+## 📚 Documentation
+
+- **PROGRESS.md**: Development log and optimization decisions
+- **TODO.md**: Planned improvements and known issues
+- **test_exp1_clean.ipynb**: Clean validation notebook
+
+---
+
+## 🎯 Project Milestones
+
+- **2026-01-10**: Core reproduction completed (r=0.85 validation)
 - **2026-01-23**: Repository created
-- **Ongoing**: Documentation refinement
+- **2026-01-25**: Modularization complete, 68MB optimization, 5× parallel speedup
+- **Next**: Cloud deployment and full experiments (Trial=10)
+
+---
 
 ## Citation
 
-Original paper:
+**Original paper:**
 ```bibtex
 @article{shiu2024drosophila,
   title={A Drosophila computational brain model reveals sensorimotor processing},
@@ -65,12 +222,30 @@ Original paper:
 }
 ```
 
-## Contact
-
-  Rui Luo, Ph.D, Tsinghua University
-
-  luorui.2016@tsinghua.org.cn
+**This implementation:**
+```bibtex
+@software{luo2026flylif,
+  author={Luo, Rui},
+  title={FlyLIF: Modularized Drosophila Brain LIF Model},
+  year={2026},
+  url={https://github.com/ruiluohub/drosophila-lif-reproduction}
+}
+```
 
 ---
 
-**Repository Status**: Private during documentation refinement.
+## 👤 Contact
+
+**Rui Luo, Ph.D.**   
+📧 luorui.2016@tsinghua.org.cn
+
+---
+
+## 📄 License
+
+[To be determined - likely MIT or match original paper]
+
+---
+
+**Repository Status**: Active development (v0.1.0-alpha)  
+**Last Updated**: 2026-01-25

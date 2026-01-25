@@ -10,7 +10,7 @@ import pandas as pd
 from brian2 import PoissonInput, SpikeMonitor, Network
 from brian2 import ms, Hz, mV
 from time import time
-
+import gc 
 
 def run_simulation(net_components, neu_exc, neu_exc2=None, neu_slnc=None,
                    params=None, duration=None, n_trials=None, verbose=True):
@@ -204,6 +204,15 @@ def run_simulation(net_components, neu_exc, neu_exc2=None, neu_slnc=None,
     
     if verbose:
         print(f"    📊 Spikes: {n_spikes:,}, Active neurons: {n_active:,}")
+    
+    # === Memory cleanup (prevent leaks in parallel workers) ===
+    # Explicitly delete large trial-specific objects
+    if 'spk_mon' in locals():
+        del spk_mon
+    if 'pois' in locals():
+        del pois
+    
+    gc.collect()  # Force garbage collection
     
     return {
         'df': df,

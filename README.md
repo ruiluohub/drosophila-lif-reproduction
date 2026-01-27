@@ -13,9 +13,11 @@ This repository contains a modularized reproduction of the connectome-constraine
 **Current implementation:**
 - ✅ Modular architecture (4 core modules + utilities)
 - ✅ Network construction from FlyWire v783 connectome (139K neurons, 2.7M synapses)
-- ✅ **Data optimization**: 95% reduction (1.4GB → 68MB) for parallel efficiency
-- ✅ **Parallel execution**: 5.14× speedup validated (6-core)
-- ✅ Validation against original paper (r=0.84 with 3 trials)
+- ✅ Data optimization: 95% reduction (1.4GB → 68MB)
+- ✅ Parallel execution: 5× speedup validated (6-core), 3× on 4-core (16GB)
+- ✅ **Exp1 validation**: r=0.93 (20×10T)
+- ✅ **Exp2 implementation**: 200×2×1T in 32 min (3× vs baseline)
+
 
 **Scope**: This reproduction validates the core methodology and provides an optimized, parallelizable implementation ready for cloud deployment.
 
@@ -170,12 +172,15 @@ Place data files in `./data_783/` directory.
 
 ### Implemented
 - ✅ Experiment 1: Sugar GRN frequency sweep (validation complete)
+- ✅ **Experiment 2**: Sufficiency test (200 neurons × 2 frequencies, 3× speedup)
+
+### In Progress
+- 🔄 **Experiment 3**: Necessity test (silencing, framework ready)
 
 ### Planned
-- Experiment 2: Sufficiency test (which neurons activate MN9)
-- Experiment 3: Necessity test (silencing experiments)
 - Experiment 4: Sugar + Bitter interaction
 - Experiment 5: Sugar + Ir94e interaction
+
 
 See `TODO.md` for implementation roadmap.
 
@@ -206,7 +211,7 @@ See `TODO.md` for detailed improvement plan.
 - **2026-01-10**: Core reproduction completed (r=0.85 validation)
 - **2026-01-23**: Repository created
 - **2026-01-25**: Modularization complete, 68MB optimization, 5× parallel speedup
-- **Next**: Cloud deployment and full experiments (Trial=10)
+- **2026-01-27**: Tested 200 neurons for MN9 activation capability
 
 ---
 
@@ -247,5 +252,5 @@ See `TODO.md` for detailed improvement plan.
 
 ---
 
-**Repository Status**: Active development (v0.1.0-alpha)  
-**Last Updated**: 2026-01-25
+**Repository Status**: Active development (0.2.0-alpha)  
+**Last Updated**: 2026-01-27

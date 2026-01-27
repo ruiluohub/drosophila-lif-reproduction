@@ -221,6 +221,123 @@ Target (48-core AWS):
 3. **Checkpoint essential**: 68min run needs fault tolerance
 4. **Efficient conversion**: Identify discrepancies first (244 vs blind 50)
 
-**Version**: 0.1.0-alpha  
-**Date**: 2026-01-27  
-**Contributors**: Rui Luo
+
+
+---
+
+## 2026-01-27: Exp2 Sufficiency Test Implementation
+
+### Completed
+
+1. **Parallel Batch Implementation**
+   - Created `flylif/core/experiments.py`
+   - Functions: `run_exp2_parallel()`, `run_exp3_parallel()`
+   - Key optimization: Parallel across neuron-frequency pairs (avoid repeated network build in serial)
+
+2. **Exp2 Full-Scale Test (200×2×1T)**
+   - **Configuration**: 200 neurons × 2 frequencies × 1 trial = 400 conditions
+   - **Method**: Split into 5 batches (40 neurons each), 4 workers
+   - **Runtime**: ~32 minutes (5 batches × 6-7 min)
+   - **Baseline comparison**: 96.2 min (projected) → 32 min (actual) = **3× speedup**
+   - **Results**: Validated sufficiency test, identified neurons that activate MN9
+
+3. **Performance Metrics**
+
+| Batch | Workers | Tasks | Time | Memory | Swap |
+|-------|---------|-------|------|--------|------|
+| 1 | 3 | 80 | 7.6 min | 54.5% | 1.7GB* |
+| 2 | 3 | 80 | 7.0 min | 45.5% | 0.0GB |
+| 3 | 4 | 80 | 5.9 min | 47.6% | 0.0GB |
+| 4 | 4 | 80 | ~6 min | - | - |
+| 5 | 4 | 80 | ~6 min | - | - |
+
+*Batch 1 swap due to system residual, cleared after restart
+
+4. **Visualization Enhancement**
+   - Updated `plot_response_heatmap()` with `neuron_order` parameter
+   - Enables consistent neuron ordering across Exp1/Exp2/Exp3
+   - Maintains comparability for cross-experiment analysis
+
+### Technical Decisions
+
+**Parallelization Strategy**
+- **Chosen**: Neuron-frequency level parallelism (400 tasks for 200×2×1T)
+- **Workers**: 4 (optimal for 16GB RAM after testing 3→4 transition)
+- **Batch size**: 40 neurons (memory-safe, ~6 min/batch)
+- **Rejected**: Worker-internal batching (Brian2 objects cannot be pickled/shared)
+
+**Data Optimization Impact**
+- Preprocessed data (68MB) enables faster network build (~7s)
+- Each worker builds network independently (unavoidable with multiprocessing)
+- Total build overhead: 400 × 7s / 4 workers = ~12 minutes (37% of total time)
+
+**Speedup Analysis**
+- Baseline (200×2×1T, serial): 96.2 min
+- Optimized (200×2×1T, 4 workers): 32 min
+- Speedup: **3× on 4-core (expected: 2.5-3×, accounting for build overhead)**
+- Data optimization contribution: Build time 28s → 7s (4× faster per build)
+
+### Results
+
+**Exp2 Key Findings** (200×2×1T):
+- Tested 200 neurons for MN9 activation capability
+- Multiple neurons identified as sufficient to activate MN9
+- Results saved: `./results/exp2_test/`
+  - Complete results (.pkl)
+  - Summary statistics (.csv)
+  - Firing rate matrix (200×2, .csv)
+  - Visualizations (heatmap, response curves)
+
+### Next Steps
+
+**Immediate**:
+1. Implement Exp3 (necessity test, 200×2×1T) using same parallel framework
+2. Validate silencing mechanism performance
+
+**Short-term**:
+1. Scale to full parameters (8 frequencies × 10 trials)
+2. Implement 4-batch execution for Exp2/3 full-scale
+3. Prepare cloud deployment scripts (48-core)
+
+### Issues Encountered
+
+**Issue 1: Worker Memory Leak**
+- **Symptom**: Swap accumulated to 1.7GB during Batch 1
+- **Cause**: System residual swap from previous runs
+- **Solution**: Restart computer cleared swap completely
+- **Prevention**: Monitor swap before starting, restart if >1GB
+
+**Issue 2: 4 Workers Validation**
+- **Test**: Increased from 3 to 4 workers at Batch 3
+- **Result**: Improved speed (7.0min → 5.9min, 1.19× faster)
+- **Memory**: Stable (47.6%, 0.0GB swap)
+- **Decision**: Use 4 workers for remaining batches
+
+**Issue 3: Front-20 Neurons Low Response**
+- **Observation**: First 20 neurons (GRNs themselves) show minimal MN9 activation
+- **Explanation**: Single GRN insufficient to activate MN9 (need ensemble)
+- **Impact**: Validated need for testing full 200 neurons (downstream neurons respond)
+
+### Lessons Learned
+
+1. **Brian2 multiprocessing limitation**: Cannot share Network objects across workers
+   - Each worker must build network independently
+   - Data optimization (68MB) is critical for parallel efficiency
+
+2. **Worker count optimization**: 4 workers optimal for 16GB RAM
+   - 3 workers: stable but slower
+   - 4 workers: 20% faster, memory still safe (<50%, 0 swap)
+
+3. **Batch size selection**: 40 neurons/batch balances runtime and memory
+   - Too large (100+): memory risk
+   - Too small (20): excessive batching overhead
+
+4. **Swap monitoring critical**: 
+   - 1.7GB swap → performance degradation risk
+   - Clean restart essential for long runs
+
+---
+
+**Version**: 0.2.0-alpha  
+**Contributors**: Rui Luo  
+**Date**: 2026-01-27

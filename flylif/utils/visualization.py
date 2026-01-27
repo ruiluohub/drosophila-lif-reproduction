@@ -77,8 +77,8 @@ def plot_correlation(rate_orig, rate_ours, n_trials_ours=10, freq=100,
 
 
 def plot_response_heatmap(all_firing_rates, freq_list, top_n=None, 
-                          cmap='viridis', figsize=None, preset='auto',
-                          vmin=None, vmax=None, save_path=None):
+                          neuron_order=None, cmap='viridis', figsize=None, 
+                          preset='auto', vmin=None, vmax=None, save_path=None):
     """
     Plot response heatmap (neurons × frequencies).
     
@@ -90,6 +90,10 @@ def plot_response_heatmap(all_firing_rates, freq_list, top_n=None,
         Frequencies to plot
     top_n : int, optional
         Number of top neurons to show. If None, auto-detect.
+    neuron_order : list, optional
+        Explicit neuron order for Y-axis. If provided, uses this order
+        instead of auto-sorting. Useful for maintaining consistent order
+        across multiple plots (e.g., Exp1 vs Exp2).
     cmap : str, default='viridis'
         Colormap name
     figsize : tuple, optional
@@ -104,23 +108,39 @@ def plot_response_heatmap(all_firing_rates, freq_list, top_n=None,
     Returns
     -------
     fig, ax, top_neurons : figure, axis, list of top neuron IDs
+    
+    Examples
+    --------
+    >>> # Default: auto-sort by max frequency response
+    >>> fig, ax, neurons = plot_response_heatmap(rates, [10, 50, 100])
+    
+    >>> # Maintain order from another experiment
+    >>> fig, ax, _ = plot_response_heatmap(rates, [50, 100], 
+    ...                                     neuron_order=exp1_top200)
     """
-    # Auto-detect top_n
-    if top_n is None:
+    # ===== Determine neuron order =====
+    if neuron_order is not None:
+        # Use provided order (e.g., from Exp1)
+        top_neurons = list(neuron_order)
+        if top_n is not None:
+            top_neurons = top_neurons[:top_n]
+    else:
+        # Auto-detect: sort by response at max frequency
+        if top_n is None:
+            max_freq = max(freq_list)
+            if max_freq in all_firing_rates:
+                n_active = len([v for v in all_firing_rates[max_freq].values() if v > 0])
+                top_n = min(n_active, 200)  # Cap at 200
+            else:
+                top_n = 200
+        
+        # Get top responsive neurons
         max_freq = max(freq_list)
         if max_freq in all_firing_rates:
-            n_active = len([v for v in all_firing_rates[max_freq].values() if v > 0])
-            top_n = min(n_active, 200)  # Cap at 200
+            rates_at_max = pd.Series(all_firing_rates[max_freq])
+            top_neurons = rates_at_max.nlargest(top_n).index.tolist()
         else:
-            top_n = 200
-    
-    # Get top responsive neurons
-    max_freq = max(freq_list)
-    if max_freq in all_firing_rates:
-        rates_at_max = pd.Series(all_firing_rates[max_freq])
-        top_neurons = rates_at_max.nlargest(top_n).index.tolist()
-    else:
-        raise ValueError(f"No data for frequency {max_freq}")
+            raise ValueError(f"No data for frequency {max_freq}")
     
     # Build matrix
     matrix = np.zeros((len(top_neurons), len(freq_list)))
@@ -132,13 +152,12 @@ def plot_response_heatmap(all_firing_rates, freq_list, top_n=None,
     # Auto figsize
     if figsize is None:
         width = max(10, len(freq_list) * 0.5)
-        height = max(10, top_n / 25)
+        height = max(10, len(top_neurons) / 25)
         figsize = (width, height)
     
     # Auto vmax (95th percentile to exclude outliers)
     if vmax is None:
         vmax = matrix.max()
-        # vmax = np.percentile(matrix[matrix > 0], 95) if (matrix > 0).any() else matrix.max()
     if vmin is None:
         vmin = 0
     

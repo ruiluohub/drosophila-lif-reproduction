@@ -100,27 +100,6 @@ def run_simulation(net_components, neu_exc, neu_exc2=None, neu_slnc=None,
         print(f"    Duration: {duration}, Trials: {n_trials}")
         print(f"    Frequency: {sim_params['r_poi']}")
     
-    # Precompute silencing synapse indices
-    if len(slnc) > 0 and 'pre_syn_indices' in net_components:
-        pre_syn_indices = net_components['pre_syn_indices']
-        weights_array = net_components['weights_array']
-        
-        slnc_syn_indices = []
-        for neuron_idx in slnc:
-            if neuron_idx in pre_syn_indices:
-                slnc_syn_indices.extend(pre_syn_indices[neuron_idx])
-        
-        slnc_syn_indices = np.array(slnc_syn_indices, dtype=np.int64) if slnc_syn_indices else np.array([], dtype=np.int64)
-        
-        if verbose and len(slnc) > 0:
-            print(f"    Silenced synapses: {len(slnc_syn_indices)}")
-        
-        # Store original weights for restoration
-        if len(slnc_syn_indices) > 0:
-            original_weights_slnc = weights_array[slnc_syn_indices].copy()
-    else:
-        slnc_syn_indices = np.array([], dtype=np.int64)
-    
     # Run trials
     all_spike_data = []
     
@@ -133,13 +112,15 @@ def run_simulation(net_components, neu_exc, neu_exc2=None, neu_slnc=None,
         
         # Step 1: Restore network state
         net.restore('initial')
-        
-        # Step 2: Apply silencing (direct weight array assignment)
-        if len(slnc_syn_indices) > 0:
-            syn.w[slnc_syn_indices] = 0 * mV
+
+        # Step 2: Apply silencing (active gate method)
+        if len(slnc) > 0:
+            neu.silenced = 0  # Reset all to active
+            for neuron_idx in slnc:
+                neu.silenced[neuron_idx] = 1  # ← 1 = silenced
         
         # Step 3: Create monitors and inputs
-        spk_mon = SpikeMonitor(neu)
+        spk_mon = SpikeMonitor(neu, record=False)  # ← MODIFIED: only count, no spike trains
         
         pois = []
         for i in exc:
@@ -163,27 +144,31 @@ def run_simulation(net_components, neu_exc, neu_exc2=None, neu_slnc=None,
             )
             neu[i].rfc = 0 * ms
             pois.append(p)
-        
+
         # Step 4: Run
         net.add(spk_mon, *pois)
         net.run(duration)
-        
-        # Step 5: Extract results (batch processing)
-        spike_i = np.array(spk_mon.i)
-        spike_t = np.array(spk_mon.t)
-        
-        if len(spike_i) > 0:
-            trial_data = pd.DataFrame({
-                't': spike_t,
-                'trial': trial_idx,
-                'neuron_idx': spike_i
-            })
-            all_spike_data.append(trial_data)
-        
+
+        # Step 5: Extract results (count-based, memory efficient)
+        # Reconstruct minimal spike data from counts for rate calculation
+        spiked_indices = np.where(spk_mon.count > 0)[0]
+
+        if len(spiked_indices) > 0:
+            for neu_idx in spiked_indices:
+                count = int(spk_mon.count[neu_idx])
+                if count > 0:
+                    # Create dummy spike times (actual times not needed for rate)
+                    trial_data = pd.DataFrame({
+                        't': np.zeros(count),  # Placeholder times
+                        'trial': trial_idx,
+                        'neuron_idx': neu_idx
+                    })
+                    all_spike_data.append(trial_data)
+
         # Step 6: Cleanup
         net.remove(spk_mon, *pois)
         
-        trial_time = time() - t0_trial
+        trial_time = time() - t0_trial     
         if verbose:
             print(f"\r    Trial {trial_idx + 1}/{n_trials} ({trial_time:.1f}s)", end='', flush=True)
     

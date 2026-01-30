@@ -305,6 +305,7 @@ def build_network(data, pre_col, post_col, weight_col, nt_prob_cols, params,
     neu.v = params['v_0']
     neu.g = 0
     neu.rfc = params['t_rfc']
+    neu.silenced = 0  # ← NEW: initialize silencing gate (all neurons active by default)
     
     if verbose:
         print(f"   ⏱️  {time()-t0:.1f}s")

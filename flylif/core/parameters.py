@@ -60,9 +60,10 @@ DEFAULT_PARAMS = {
         dv/dt = (v_0 - v + g) / t_mbr : volt (unless refractory)
         dg/dt = -g / tau               : volt (unless refractory) 
         rfc                            : second
+        silenced                       : integer
     '''),
     
-    'eq_th': 'v > v_th',             # Threshold condition for spike generation
+    'eq_th': 'v > v_th and silenced == 0',  # Threshold condition for spike generation MODIFIED: add active condition           
     'eq_rst': 'v = v_rst; w = 0; g = 0 * mV',  # Reset equations after spike
 }
 
@@ -96,8 +97,10 @@ PARAM_DOCS = {
         v : membrane potential (volt)
         g : synaptic conductance (volt) 
         rfc : refractory period (second)
+        active : silencing gate (boolean)  
     The model uses voltage-based synaptic input where incoming spikes
-    increment g, which then exponentially decays with time constant tau.''',
+    increment g, which then exponentially decays with time constant tau.
+    Neurons can be silenced by setting active=False.''',  # ← MODIFIED
     'eq_th': 'Threshold condition for spike generation',
     'eq_rst': 'Reset equations executed after spike',
 }

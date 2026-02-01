@@ -251,6 +251,8 @@ def run_exp3_worker(neuron_to_silence, freq, neu_exc, data, params,
     return (neuron_to_silence, freq, stats, task_key)
 
 
+
+
 # =============================================================================
 # Main Functions (parallel orchestration with checkpoint support)
 # =============================================================================
@@ -763,6 +765,298 @@ def run_exp2_baseline_unoptimized(data, neurons_to_test, freqs, target_neurons,
     
     return total_time
 
+
+# =============================================================================
+# Exp4: Dual Modality Experiments
+# =============================================================================
+
+def run_dual_modality_worker(freq1, freq2, neu_exc1, neu_exc2, data, params,
+                              target_neurons, n_trials, task_key=None):
+    """
+    Worker for dual modality experiment.
+    
+    Activates neu_exc1 at freq1 (r_poi) and neu_exc2 at freq2 (r_poi2).
+    Measures target neuron (MN9) response.
+    
+    Parameters
+    ----------
+    freq1, freq2 : int
+        Activation frequencies (Hz)
+    neu_exc1, neu_exc2 : list
+        Neuron IDs to activate
+    data : dict
+        Preprocessed connectivity data
+    params : dict
+        Simulation parameters
+    target_neurons : list
+        Neurons to monitor (e.g., MN9)
+    n_trials : int
+        Number of trials
+    task_key : str, optional
+        Unique identifier for checkpoint
+    
+    Returns
+    -------
+    tuple : (freq1, freq2, {'mean': float, 'std': float}, task_key)
+    """
+    start_scope()  # Clean state
+    
+    from flylif.core.network import build_network
+    from flylif.core.simulation import run_simulation
+    
+    # Build network
+    columns = data['columns']
+    net = build_network(
+        data=data,
+        pre_col=columns['pre_col'],
+        post_col=columns['post_col'],
+        weight_col=columns['weight_col'],
+        nt_prob_cols=columns.get('nt_prob_cols', {}),
+        params=params,
+        syn_threshold=5,
+        verbose=False
+    )
+    
+    # Run simulation with dual activation
+    result = run_simulation(
+        net_components=net,
+        neu_exc=neu_exc1,   # Activated at r_poi
+        neu_exc2=neu_exc2,  # Activated at r_poi2
+        params={'r_poi': freq1 * Hz, 'r_poi2': freq2 * Hz},
+        n_trials=n_trials,
+        verbose=False
+    )
+    
+    df = result['df']
+    duration_s = float(params['t_run'] / ms) / 1000
+    
+    # Calculate target neuron firing rates per trial
+    target_rates = []
+    for trial in range(n_trials):
+        trial_df = df[df['trial'] == trial]
+        count = 0
+        for tid in target_neurons:
+            count += len(trial_df[trial_df['flywire_id'] == tid])
+        target_rates.append(count / duration_s)
+    
+    stats = {
+        'mean': np.mean(target_rates),
+        'std': np.std(target_rates),
+    }
+    
+    # Cleanup
+    del net
+    del result
+    gc.collect()
+    
+    return (freq1, freq2, stats, task_key)
+
+
+def run_exp4_parallel(data, neu_exc1, neu_exc2, freq_range1, freq_range2,
+                      target_neurons, params, n_trials=10, n_workers=4,
+                      checkpoint_dir=None, exp_name='exp4', verbose=True):
+    """
+    Run dual modality experiment with checkpoint support.
+    
+    Tests interaction between two GRN populations (e.g., Sugar × Bitter).
+    
+    Parameters
+    ----------
+    data : dict
+        Preprocessed data
+    neu_exc1 : list
+        First population (e.g., Sugar GRNs), activated at freq_range1
+    neu_exc2 : list
+        Second population (e.g., Bitter GRNs), activated at freq_range2
+    freq_range1, freq_range2 : list
+        Frequency ranges to test (Hz)
+    target_neurons : list
+        Target neurons to monitor
+    params : dict
+        Simulation parameters
+    n_trials : int
+        Trials per condition
+    n_workers : int
+        Number of parallel workers
+    checkpoint_dir : str or Path, optional
+        Checkpoint directory (enables resume)
+    exp_name : str
+        Experiment label (for logging)
+    verbose : bool
+    
+    Returns
+    -------
+    dict : {
+        'results': {freq1: {freq2: {'mean': float, 'std': float}}},
+        'matrix': numpy array (freq_range2 × freq_range1),
+        'baselines': {freq1: {'mean': float, 'std': float}}  # freq2=0 conditions
+    }
+    
+    Examples
+    --------
+    >>> result = run_exp4_parallel(
+    ...     DATA, SUGAR_GRNs, BITTER_GRNs, [0,50,100], [0,50,100],
+    ...     [MN9_ID], DEFAULT_PARAMS, checkpoint_dir='./checkpoints/exp4a'
+    ... )
+    """
+    from joblib import Parallel, delayed
+    
+    if verbose:
+        print("\n" + "=" * 70)
+        print(f"{exp_name}: Dual Modality Test (Parallel with Checkpoint)")
+        print("=" * 70)
+        print(f"  Population 1: {len(neu_exc1)} neurons")
+        print(f"  Population 2: {len(neu_exc2)} neurons")
+        print(f"  Freq range 1: {freq_range1}")
+        print(f"  Freq range 2: {freq_range2}")
+        print(f"  Total conditions: {len(freq_range1) * len(freq_range2)}")
+        print(f"  Workers: {n_workers}")
+        if checkpoint_dir:
+            print(f"  Checkpoint: {checkpoint_dir}")
+    
+    # Initialize checkpoint
+    if checkpoint_dir:
+        from flylif.utils.checkpoint import CheckpointManager
+        from pathlib import Path
+        ckpt = CheckpointManager(Path(checkpoint_dir))
+    else:
+        ckpt = None
+    
+    # Create tasks with checkpoint filtering
+    all_task_specs = []
+    
+    for f1 in freq_range1:
+        for f2 in freq_range2:
+            task_key = f'{f1}_{f2}'
+            
+            # Skip if completed
+            if ckpt and ckpt.is_completed(task_key):
+                if verbose:
+                    print(f"  ⏭️  Skip {task_key}")
+                continue
+            
+            all_task_specs.append((f1, f2, neu_exc1, neu_exc2, data, params,
+                                  target_neurons, n_trials, task_key))
+    
+    tasks = all_task_specs
+    
+    if verbose:
+        n_total = len(freq_range1) * len(freq_range2)
+        n_remaining = len(tasks)
+        n_completed = n_total - n_remaining
+        print(f"\n  Progress: {n_completed}/{n_total} completed, {n_remaining} remaining")
+    
+    # Early exit if all completed
+    if len(tasks) == 0:
+        if verbose:
+            print(f"\n  ✅ All tasks completed, loading from checkpoint...")
+        return _load_exp4_results_from_checkpoint(ckpt, freq_range1, freq_range2)
+    
+    if verbose:
+        t0 = time()
+    
+    # Parallel execution with real-time checkpoint
+    results_list = []
+    
+    with Parallel(n_jobs=n_workers, verbose=5, max_nbytes='100M',
+                  return_as='generator') as parallel:
+        
+        generator = parallel(delayed(run_dual_modality_worker)(*task) for task in tasks)
+        
+        for result in generator:
+            freq1, freq2, stats, task_key = result
+            
+            # Save checkpoint immediately
+            if ckpt:
+                ckpt.save(task_key, {
+                    'freq1': freq1,
+                    'freq2': freq2,
+                    'stats': stats
+                })
+            
+            results_list.append(result)
+    
+    if verbose:
+        elapsed = time() - t0
+        print(f"\n  ✅ Complete! Total: {elapsed/60:.1f} min")
+        if ckpt:
+            print(f"     Checkpoints saved: {len(results_list)}")
+    
+    # Organize results
+    results_dict = {}
+    for freq1, freq2, stats, _ in results_list:
+        if freq1 not in results_dict:
+            results_dict[freq1] = {}
+        results_dict[freq1][freq2] = stats
+    
+    # Add previously completed results
+    if ckpt:
+        all_completed = ckpt.load_all_completed()
+        for task_key, data_saved in all_completed.items():
+            f1 = data_saved['freq1']
+            f2 = data_saved['freq2']
+            stats = data_saved['stats']
+            
+            if f1 not in results_dict:
+                results_dict[f1] = {}
+            results_dict[f1][f2] = stats
+    
+    # Create 2D matrix
+    matrix = np.zeros((len(freq_range2), len(freq_range1)))
+    for i, f2 in enumerate(freq_range2):
+        for j, f1 in enumerate(freq_range1):
+            if f1 in results_dict and f2 in results_dict[f1]:
+                matrix[i, j] = results_dict[f1][f2]['mean']
+    
+    # Extract baselines (freq2=0)
+    baselines = {}
+    for f1 in freq_range1:
+        if f1 in results_dict and 0 in results_dict[f1]:
+            baselines[f1] = results_dict[f1][0]
+    
+    return {
+        'results': results_dict,
+        'matrix': matrix,
+        'baselines': baselines,
+        'freq_range1': freq_range1,
+        'freq_range2': freq_range2,
+    }
+
+
+def _load_exp4_results_from_checkpoint(ckpt, freq_range1, freq_range2):
+    """Load all Exp4 results from checkpoint."""
+    all_completed = ckpt.load_all_completed()
+    
+    results_dict = {}
+    for task_key, data in all_completed.items():
+        f1 = data['freq1']
+        f2 = data['freq2']
+        stats = data['stats']
+        
+        if f1 not in results_dict:
+            results_dict[f1] = {}
+        results_dict[f1][f2] = stats
+    
+    # Create matrix
+    matrix = np.zeros((len(freq_range2), len(freq_range1)))
+    for i, f2 in enumerate(freq_range2):
+        for j, f1 in enumerate(freq_range1):
+            if f1 in results_dict and f2 in results_dict[f1]:
+                matrix[i, j] = results_dict[f1][f2]['mean']
+    
+    # Extract baselines
+    baselines = {}
+    for f1 in freq_range1:
+        if f1 in results_dict and 0 in results_dict[f1]:
+            baselines[f1] = results_dict[f1][0]
+    
+    return {
+        'results': results_dict,
+        'matrix': matrix,
+        'baselines': baselines,
+        'freq_range1': freq_range1,
+        'freq_range2': freq_range2,
+    }
 
 # =============================================================================
 # Testing

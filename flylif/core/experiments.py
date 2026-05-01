@@ -20,6 +20,149 @@ import gc
 # =============================================================================
 # Worker Functions (for joblib parallel)
 # =============================================================================
+# Worker function with memory optimization
+def run_exp1_worker(freq, neu_exc, data, params, n_trials):
+    """
+    Exp1 worker: Single frequency simulation.
+    
+    Optimized with start_scope() and minimal return data.
+    """
+
+    start_scope()  # Clear Brian2 global state
+    
+    from flylif.core.network import build_network
+    from flylif.core.simulation import run_simulation
+    
+    # Build network
+    columns = data['columns']
+    net_components = build_network(
+        data=data,
+        pre_col=columns['pre_col'],
+        post_col=columns['post_col'],
+        weight_col=columns['weight_col'],
+        nt_prob_cols=columns.get('nt_prob_cols', {}),
+        params=params,
+        syn_threshold=5,
+        verbose=False
+    )
+    
+    # Run simulation
+    result = run_simulation(
+        net_components=net_components,
+        neu_exc=neu_exc,
+        params={'r_poi': freq * Hz},
+        n_trials=n_trials,
+        verbose=False
+    )
+    
+    # Extract only essential data
+    result_clean = {
+        'n_active': result['n_active'],
+        'n_spikes': result['n_spikes'],
+        'df': result['df'].copy(),
+    }
+    
+    # Explicit cleanup
+    del net_components
+    del result
+    gc.collect()
+    
+    return (freq, result_clean)
+
+
+
+
+# Worker function
+def shuffled_control_worker(sim_idx, shuffle, data, params, 
+                            neu_exc, target_id, task_key=None):
+    """
+    Shuffled connectivity control worker (corrected).
+    
+    Shuffles connection topology by randomizing post-synaptic targets
+    while maintaining global connectivity statistics.
+    
+    Parameters
+    ----------
+    sim_idx : int
+        Simulation index (0-99)
+    shuffle : bool
+        If True, shuffle post-synaptic targets in df_conn
+    data : dict
+        Original DATA from load_simulation_data()
+    params : dict
+        DEFAULT_PARAMS
+    neu_exc : list
+        Neurons to activate (Sugar GRNs)
+    target_id : int
+        Target neuron to monitor (MN9)
+    task_key : str
+        Checkpoint key
+    
+    Returns
+    -------
+    tuple : (sim_idx, shuffle, mn9_activated, task_key)
+    """
+    from brian2 import start_scope, Hz
+    start_scope()
+    
+    from flylif.core.network import build_network
+    from flylif.core.simulation import run_simulation
+    import gc
+    
+    # === Shuffle at data level (changes topology) ===
+    if shuffle:
+        # Create shuffled data copy
+        data_use = data.copy()
+        df_conn_shuffled = data['df_conn'].copy()
+        
+        # Shuffle post-synaptic targets
+        # This changes WHO connects to WHOM
+        post_col = data['columns']['post_col']
+        post_ids = df_conn_shuffled[post_col].values.copy()
+        
+        np.random.seed(sim_idx)  # Reproducible shuffle
+        np.random.shuffle(post_ids)
+        
+        df_conn_shuffled[post_col] = post_ids
+        data_use['df_conn'] = df_conn_shuffled
+    else:
+        # Use original data
+        data_use = data
+    
+    # Build network (with original or shuffled connectivity)
+    columns = data_use['columns']
+    net = build_network(
+        data=data_use,
+        pre_col=columns['pre_col'],
+        post_col=columns['post_col'],
+        weight_col=columns['weight_col'],
+        nt_prob_cols=columns.get('nt_prob_cols', {}),
+        params=params,
+        syn_threshold=5,
+        verbose=False
+    )
+    
+    # Run simulation (100 Hz sugar activation, 1 trial)
+    result = run_simulation(
+        net_components=net,
+        neu_exc=neu_exc,
+        params={'r_poi': 100 * Hz},
+        n_trials=1,
+        verbose=False
+    )
+    
+    # Check if MN9 activated (>0 Hz)
+    df = result['df']
+    mn9_activated = len(df[df['flywire_id'] == target_id]) > 0
+    
+    # Cleanup
+    del net, result
+    if shuffle:
+        del data_use, df_conn_shuffled
+    gc.collect()
+    
+    return (sim_idx, shuffle, mn9_activated, task_key)
+
 def compute_control_worker(freq, neu_exc, data, params, target_neurons, n_trials):
     """
     Worker for computing single control baseline.
@@ -256,7 +399,90 @@ def run_exp3_worker(neuron_to_silence, freq, neu_exc, data, params,
 # =============================================================================
 # Main Functions (parallel orchestration with checkpoint support)
 # =============================================================================
+# Batch runner with checkpoirun_exp1_batchnt and memory monitoring
+def run_exp1_batch(freq_list, batch_name, n_workers=3, n_trials=10, 
+              checkpoint_dir='./checkpoints/exp1'):
+    """
+    Run batch with checkpoint and memory monitoring.
+    
+    Parameters
+    ----------
+    freq_list : list
+        List of frequencies to test
+    batch_name : str
+        Name of the batch (for logging)
+    n_workers : int
+        Number of parallel workers
+    n_trials : int
+        Trials per frequency
+    checkpoint_dir : str or Path
+        Checkpoint directory
+    
+    Returns
+    -------
+    dict : {freq: result}
+    """
+    from flylif.utils.checkpoint import CheckpointManager
+    
+    print("\n" + "=" * 70)
+    print(f"Batch: {batch_name}")
+    print("=" * 70)
+    
+    # Initialize checkpoint
+    ckpt = CheckpointManager(checkpoint_dir)
+    
+    # Check remaining tasks
+    remaining = ckpt.get_remaining(freq_list)
+    
+    if not remaining:
+        print(f"✅ All frequencies already completed, loading from checkpoint...")
+        return ckpt.load_all_completed()
+    
+    print(f"\nConfiguration:")
+    print(f"  Frequencies: {remaining}")
+    print(f"  Trials/freq: {n_trials}")
+    print(f"  Workers: {n_workers}")
+    print(f"  Checkpoint: {checkpoint_dir}")
+    
+    # Memory check
+    is_safe, msg = check_memory_safe(threshold=80.0, swap_threshold=0.5)
+    print(f"\n  Memory status: {msg}")
+    
+    if not is_safe:
+        print(f"  ⚠️  Memory not safe, recommend cleanup first")
+        memory_cleanup()
+        print_memory("    After cleanup: ")
+    
+    # Prepare tasks
+    tasks = [(freq, NEU_SUGAR_LEFT, DATA, DEFAULT_PARAMS, n_trials) 
+             for freq in remaining]
+    
+    print(f"\n  Running {len(tasks)} tasks...")
+    
+    with MemoryMonitor(label=batch_name):
+        t0 = time()
+        
+        results = Parallel(n_jobs=n_workers, verbose=5, max_nbytes='100M')(
+            delayed(run_exp1_worker)(*task) for task in tasks
+        )
+        
+        batch_time = time() - t0
+    
+    # Save to checkpoint
+    for freq, result in results:
+        ckpt.save(freq, result)
+    
+    print(f"\n  ✅ Batch complete in {batch_time/60:.2f} min")
+    print_memory("  Final memory: ")
+    
+    # Cleanup
+    del results
+    gc.collect()
+    
+    return ckpt.load_all_completed()
 
+
+    
 def run_exp2_parallel(data, neurons_to_test, freqs, target_neurons, 
                       params, n_trials=10, n_workers=3, 
                       checkpoint_dir=None, verbose=True):

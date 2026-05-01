@@ -64,7 +64,7 @@ def plot_correlation(rate_orig, rate_ours, n_trials_ours=10, freq=100,
     # Add stats text
     n_active_orig = (df_compare.iloc[:, 0] > 0).sum()
     n_active_ours = (df_compare.iloc[:, 1] > 0).sum()
-    textstr = f'Original: {n_active_orig} neurons\nOurs: {n_active_ours} neurons'
+    textstr = f'Original: {n_active_orig} neurons\nThis repo: {n_active_ours} neurons'
     ax.text(0.05, 0.95, textstr, transform=ax.transAxes, fontsize=10,
             verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
     

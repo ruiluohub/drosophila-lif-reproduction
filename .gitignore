@@ -1,39 +1,25 @@
-# Data files (large, not for git)
+# FlyWire connectome data (download separately via Zenodo)
 data_783/
-*.feather
-*.npy
-*.parquet
 
-# Results
-results/
-*.pkl
-*.csv
-
-# Brian2 cache
-brian2_cache/
-__pycache__/
-*.pyc
+# Original paper reference data (optional, see Quick Start)
+reference_data/
 
 # Jupyter
 .ipynb_checkpoints/
-*-checkpoint.ipynb
+*.ipynb_checkpoints
 
-# Cache
-cache/
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+env/
 
-# IDE
-.vscode/
-.idea/
-*.swp
+# Brian2 compilation cache
+brian_objects/
+brian_extensions/
+*.lock
 
 # OS
 .DS_Store
-Thumbs.db
-
-# Large test files
-Drosophila_brain_model/
-
-# Temporary
-temp/
-tmp/
-*.log
